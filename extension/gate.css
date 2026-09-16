@@ -1,0 +1,2 @@
+/* Applied before page scripts. No video is visible until explicitly approved. */
+html:not([data-focus-gate-allowed]) video {visibility: hidden !important; pointer-events: none !important;}
