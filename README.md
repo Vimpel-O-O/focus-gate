@@ -1,10 +1,6 @@
 # Focus Gate
 
-A personal Chrome/Brave extension that checks YouTube videos against your interests before letting you play them. The default filter is:
-
-> Choose the topics you want to watch in extension settings.
-
-Related topics are enough; immediate practical usefulness is not required. Edit this in Settings at any time.
+A personal Chrome/Brave extension that checks YouTube videos against your interests/goals before letting you play them. The default filter is:
 
 ## Start here
 
