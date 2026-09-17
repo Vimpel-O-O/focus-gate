@@ -24,19 +24,25 @@ function fixture(initial = 'https://www.youtube.com/watch?v=aaaaaaaaaaa') {
     play() {this.paused = false; return Promise.resolve();}
   }
   const root = new Element('html'), video = new Media(); root.append(video);
-  const listeners = new Map(); const pending = []; let interval;
+  const listeners = new Map(); const pending = []; let interval, onMessage;
+  let now = 0, nextTimer = 0; const timers = new Map();
+  const setTimeout = (callback, ms) => {const id = ++nextTimer; timers.set(id, {callback, at: now + ms}); return id;};
+  const clearTimeout = id => timers.delete(id);
   const location = {href: initial, get pathname() {return new URL(this.href).pathname;}};
   const document = {
     documentElement: root,
     createElement: tag => new Element(tag),
+    createElementNS: (_namespace, tag) => new Element(tag),
     querySelectorAll: selector => selector === 'video' ? [video] : [],
     querySelector: selector => selector === 'video' ? video : null,
     addEventListener(type, callback) {if (!listeners.has(type)) listeners.set(type, []); listeners.get(type).push(callback);}
   };
   const emit = (event, target = document) => (listeners.get(event) || []).forEach(fn => fn({target}));
-  const chrome = {runtime: {sendMessage: msg => new Promise(resolve => pending.push({msg, resolve}))}};
-  runInNewContext(script, {document, location, chrome, URL, HTMLMediaElement: Media, window: {addEventListener() {}}, setInterval: callback => {interval = callback;}});
+  const chrome = {runtime: {sendMessage: msg => new Promise(resolve => pending.push({msg, resolve})), onMessage: {addListener(fn) {onMessage = fn;}}}};
+  runInNewContext(script, {document, location, chrome, URL, HTMLMediaElement: Media, window: {addEventListener() {}}, setTimeout, clearTimeout, setInterval: callback => {interval = callback;}});
   return {root, video, pending, emit,
+    advance(ms) {now += ms; for (const [id, timer] of timers) if (timer.at <= now) {timers.delete(id); timer.callback();}},
+    settingsChanged: () => onMessage({type: 'focus-settings-changed'}),
     tick: () => interval(),
     go(id) {emit('yt-navigate-start'); location.href = `https://www.youtube.com/watch?v=${id}`; emit('yt-navigate-finish');},
     find: text => root.all().find(el => el.textContent === text),
@@ -46,15 +52,19 @@ function fixture(initial = 'https://www.youtube.com/watch?v=aaaaaaaaaaa') {
 const allowed = {allowed:true, verdict:'allow', reason:'Related to computer science.', title:'CS discussion', channel:'Example', evidence:'title and channel only'};
 const blocked = {...allowed, allowed:false, verdict:'block', reason:'Unrelated gameplay.'};
 
-test('pauses before evaluation and requires an explicit click after approval', async () => {
+test('shows loading and approves playback only after 300 ms, without buttons', async () => {
   const f = fixture(); assert.equal(f.video.paused,true); assert.equal(f.allowed,undefined);
+  assert.ok(f.root.all().some(el => el.className === 'loading'));
   f.pending[0].resolve(allowed); await flush();
-  assert.equal(f.video.paused,true);
-  f.find('Watch this video').onclick();
+  assert.equal(f.video.paused,true); assert.ok(f.root.all().some(el => el.className === 'icon allowed'));
+  assert.ok(!f.root.all().some(el => ['button','a'].includes(el.tagName)));
+  f.advance(299); assert.equal(f.allowed,undefined);
+  f.advance(1);
   assert.equal(f.allowed,'aaaaaaaaaaa'); assert.equal(f.video.paused,false);
+  assert.equal(f.find('Good to watch'),undefined);
 });
 test('SPA navigation revokes approval and stops playback', async () => {
-  const f = fixture(); f.pending[0].resolve(allowed); await flush(); f.find('Watch this video').onclick();
+  const f = fixture(); f.pending[0].resolve(allowed); await flush(); f.advance(300);
   f.go('bbbbbbbbbbb'); assert.equal(f.allowed,undefined); assert.equal(f.video.paused,true);
   f.pending[1].resolve(blocked); await flush();
   assert.ok(f.find('Save your attention')); assert.equal(f.find('Watch this video'),undefined);
@@ -65,10 +75,25 @@ test('stale approval cannot overwrite the current blocked video', async () => {
   f.pending[0].resolve(allowed); await flush();
   assert.ok(f.find('Save your attention')); assert.equal(f.allowed,undefined); assert.equal(f.find('Watch this video'),undefined);
 });
-test('service errors and repeated play events stay blocked; Shorts are reviewed', async () => {
+test('service errors stay blocked; Shorts block immediately without any API request', async () => {
   const f = fixture(); f.pending[0].resolve({error:'Service offline'}); await flush();
-  assert.ok(f.find('Still paused')); f.video.paused = false; f.emit('play',f.video); assert.equal(f.video.paused,true);
+  assert.ok(f.find('Couldn’t check this video')); f.video.paused = false; f.emit('play',f.video); assert.equal(f.video.paused,true);
   const shorts = fixture('https://www.youtube.com/shorts/aaaaaaaaaaa');
-  assert.ok(shorts.find('Checking this video')); assert.equal(shorts.pending.length,1); assert.equal(shorts.video.paused,true);
-  shorts.pending[0].resolve(blocked); await flush(); assert.ok(shorts.find('Save your attention'));
+  assert.ok(shorts.find('Shorts are blocked')); assert.equal(shorts.pending.length,0); assert.equal(shorts.video.paused,true);
+  shorts.tick(); shorts.advance(5000); assert.equal(shorts.pending.length,0);
+});
+test('navigation during green check cancels its delayed playback', async () => {
+  const f = fixture(); f.pending[0].resolve(allowed); await flush(); f.advance(200);
+  f.go('bbbbbbbbbbb'); f.pending[1].resolve(blocked); await flush(); f.advance(300);
+  assert.equal(f.allowed,undefined); assert.equal(f.video.paused,true); assert.ok(f.root.all().some(el => el.className === 'icon blocked'));
+});
+test('home page to video starts a check without a reload', () => {
+  const f = fixture('https://www.youtube.com/'); assert.equal(f.pending.length,0);
+  f.go('aaaaaaaaaaa'); assert.equal(f.pending.length,1); assert.equal(f.pending[0].msg.videoId,'aaaaaaaaaaa');
+});
+test('saving popup settings cancels pending approval and rechecks the video', async () => {
+  const f = fixture(); f.pending[0].resolve(allowed); await flush();
+  f.settingsChanged(); f.advance(300);
+  assert.equal(f.allowed,undefined); assert.equal(f.pending.length,2);
+  f.pending[1].resolve(blocked); await flush(); assert.ok(f.find('Save your attention'));
 });

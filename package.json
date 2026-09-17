@@ -1,5 +1,20 @@
 {
-  "name": "focus-gate", "version": "0.1.0", "private": true, "type": "module",
-  "engines": {"node": ">=22"},
-  "scripts": {"start": "node server/start.mjs", "test": "node --test tests/*.test.mjs"}
+  "name": "focus-gate",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server/start.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "setup": "node scripts/service.mjs setup",
+    "service:update": "node scripts/service.mjs update",
+    "service:status": "node scripts/service.mjs status",
+    "service:stop": "node scripts/service.mjs stop",
+    "service:start": "node scripts/service.mjs start",
+    "service:token": "node scripts/service.mjs token",
+    "service:uninstall": "node scripts/service.mjs uninstall"
+  }
 }

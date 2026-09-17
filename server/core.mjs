@@ -25,11 +25,13 @@ export function validateInput(body) {
   if (!body || !VIDEO_ID.test(body.videoId)) throw new Error('Invalid YouTube video ID.');
   if (typeof body.goals !== 'string' || !body.goals.trim() || body.goals.length > 4000) throw new Error('Goals must contain 1–4000 characters.');
   if (typeof body.task !== 'string' || body.task.length > 500) throw new Error('Current task must be at most 500 characters.');
-  return {videoId: body.videoId, goals: body.goals.trim(), task: body.task.trim()};
+  const ids = body.trustedChannelIds ?? [];
+  if (!Array.isArray(ids) || ids.length > 30 || ids.some(id => typeof id !== 'string' || !/^UC[\w-]{22}$/.test(id))) throw new Error('Invalid trusted channel list. Save it again in settings.');
+  return {videoId: body.videoId, goals: body.goals.trim(), task: body.task.trim(), trustedChannelIds: [...new Set(ids)].sort()};
 }
 
-export async function limitedText(response, max) {
-  if (!response.ok) throw new Error(`Source unavailable (${response.status}).`);
+export async function limitedText(response, max, requireOk = true) {
+  if (requireOk && !response.ok) throw new Error(`Source unavailable (${response.status}).`);
   const reader = response.body.getReader();
   const chunks = []; let size = 0;
   try {
@@ -43,9 +45,9 @@ export async function limitedText(response, max) {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-export async function getVideoSource(videoId, fetcher = fetch) {
+export async function getVideoSource(videoId, fetcher = fetch, trustedChannelIds = []) {
   if (!VIDEO_ID.test(videoId)) throw new Error('Invalid YouTube video ID.');
-  const source = {videoId, title: '', channel: '', description: '', transcript: '', evidence: 'title and channel only'};
+  const source = {videoId, title: '', channel: '', channelId: '', description: '', transcript: '', evidence: 'title and channel only'};
   const options = () => ({redirect: 'error', signal: AbortSignal.timeout(9000)});
   // Public, cookie-free requests only. No account credentials or access-control bypass.
   try {
@@ -55,8 +57,10 @@ export async function getVideoSource(videoId, fetcher = fetch) {
     if (details?.videoId === videoId) {
       source.title = String(details.title || '').slice(0, 500);
       source.channel = String(details.author || '').slice(0, 300);
+      source.channelId = /^UC[\w-]{22}$/.test(details.channelId || '') ? details.channelId : '';
       source.description = String(details.shortDescription || '').slice(0, 10000);
       if (source.description) source.evidence = 'title, channel and description';
+      if (source.channelId && trustedChannelIds.includes(source.channelId)) return source;
       const tracks = player?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
       const track = tracks.find(t => t.languageCode === 'en' && t.kind !== 'asr') || tracks.find(t => t.languageCode === 'en') || tracks[0];
       if (track?.baseUrl) {
@@ -83,6 +87,12 @@ export async function getVideoSource(videoId, fetcher = fetch) {
       const data = JSON.parse(await limitedText(await fetcher(url, options()), 50000));
       source.title = String(data.title || '').slice(0, 500);
       source.channel = String(data.author_name || '').slice(0, 300);
+      try {
+        const author = new URL(data.author_url);
+        if (author.protocol === 'https:' && ['www.youtube.com', 'youtube.com'].includes(author.hostname)) {
+          source.channelId = author.pathname.match(/^\/channel\/(UC[\w-]{22})\/?$/)?.[1] || '';
+        }
+      } catch { /* Missing verified channel ID means normal AI review. */ }
     } catch { throw new Error('YouTube metadata could not be retrieved. Video remains blocked; try again later.'); }
   }
   if (!source.title) throw new Error('YouTube returned no usable title.');
@@ -115,7 +125,17 @@ export async function evaluateVideo(input, source, {apiKey, model = 'gpt-4.1-min
     })
   });
   if (!response.ok) {
-    const message = response.status === 401 ? 'OpenAI rejected the API key.' : response.status === 429 ? 'OpenAI rate or billing limit reached.' : `OpenAI request failed (${response.status}).`;
+    let code = '';
+    try {
+      const body = JSON.parse(await limitedText(response, 50000, false));
+      code = body.error?.code || body.error?.type || '';
+    } catch { /* Preserve a safe generic message for malformed error bodies. */ }
+    let message = response.status === 401 ? 'OpenAI rejected the API key.' : response.status === 429 ? 'OpenAI rate or billing limit reached; the response did not identify which. Check API billing and limits.' : `OpenAI request failed (${response.status}).`;
+    if (response.status === 429 && ['insufficient_quota', 'billing_hard_limit_reached', 'billing_not_active'].includes(code)) {
+      message = 'OpenAI API quota is unavailable or exhausted. Check credits and usage limits at platform.openai.com/settings/organization/billing/overview. Waiting and retrying alone will not resolve exhausted quota.';
+    } else if (response.status === 429 && code === 'rate_limit_exceeded') {
+      message = 'OpenAI temporarily rate-limited this request. Wait at least a minute before trying again; if it persists, check your API model limits.';
+    }
     throw new Error(`${message} Video remains blocked.`);
   }
   const data = JSON.parse(await limitedText(response, 100000));

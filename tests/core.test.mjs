@@ -15,7 +15,7 @@ test('extracts balanced player JSON without executing page code', () => {
 test('rejects URLs as video IDs and oversized user context', () => {
   assert.throws(() => validateInput({...input, videoId: 'http://localhost'}));
   assert.throws(() => validateInput({...input, goals: 'x'.repeat(4001)}));
-  assert.deepEqual(validateInput(input), input);
+  assert.deepEqual(validateInput(input), {...input, trustedChannelIds: []});
 });
 test('uncertain, low confidence, malformed and explicit block never allow', () => {
   assert.equal(validateDecision(result).allowed, true);
@@ -56,6 +56,11 @@ test('API refusal, missing key and billing errors fail closed', async () => {
   await assert.rejects(evaluateVideo(input, source, {apiKey: ''}), /key is missing/);
   await assert.rejects(evaluateVideo(input, source, {apiKey: 'test', fetcher: async () => new Response('', {status: 429})}), /billing limit/);
   await assert.rejects(evaluateVideo(input, source, {apiKey: 'test', fetcher: async () => Response.json({status: 'completed', output: [{content: [{type: 'refusal', refusal: 'No'}]}]})}), /no valid decision/);
+});
+test('distinguishes exhausted quota from temporary rate limits without exposing raw errors', async () => {
+  for (const [code, expected] of [['insufficient_quota', /quota is unavailable or exhausted/], ['rate_limit_exceeded', /temporarily rate-limited/]]) {
+    await assert.rejects(evaluateVideo(input, source, {apiKey: 'test', fetcher: async () => Response.json({error: {code, message: 'private upstream detail'}}, {status: 429})}), error => expected.test(error.message) && !error.message.includes('private upstream detail'));
+  }
 });
 test('HTTP authentication, origin checks, caching and goal changes', async t => {
   let calls = 0;

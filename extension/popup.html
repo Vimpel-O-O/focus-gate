@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Focus Gate</title><link rel="stylesheet" href="popup.css"></head>
+<body><main><header><h1>Focus Gate</h1><p>Keep your videos relevant.</p></header>
+<form id="settings"><fieldset id="settings-fields" disabled>
+<label for="goals">Your interests</label><textarea id="goals" rows="5" maxlength="4000" placeholder="Enter the topics you want to watch" required></textarea>
+<label for="trustedChannels">Trusted channels</label><textarea id="trustedChannels" rows="2" maxlength="7500" placeholder="@yourfavoritecreator&#10;https://www.youtube.com/@anothercreator"></textarea>
+<p class="hint">One @handle or channel URL per line. These channels skip AI review. Shorts stay blocked.</p>
+<label for="token">Local pairing token</label><input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="Token from your local service" required>
+<p class="hint">Use the token from your terminal, not your OpenAI API key.</p>
+<div class="actions"><button type="submit">Save</button><button type="button" id="test">Test connection</button></div>
+<p id="status" role="status"></p><p id="connection" role="status"></p>
+</fieldset></form><footer>Reviews video text against your interests. Your interests and retrieved video text are sent to OpenAI.</footer></main><script type="module" src="options.js"></script></body></html>

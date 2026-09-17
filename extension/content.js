@@ -1,71 +1,101 @@
 (() => {
   let current = null, approved = null, generation = 0, panel = null;
+  let approvalTimer = null, navigating = false, navigationTimer = null;
   function videoId() {
     const u = new URL(location.href);
-    const candidate = u.pathname === '/watch' ? u.searchParams.get('v') : u.pathname.match(/^\/(?:embed|shorts|live)\/([\w-]{11})(?:\/|$)/)?.[1];
-    return /^[\w-]{11}$/.test(candidate || '') ? candidate : null;
+    const id = u.pathname === '/watch' ? u.searchParams.get('v') : u.pathname.match(/^\/(?:embed|shorts|live)\/([\w-]{11})(?:\/|$)/)?.[1];
+    return /^[\w-]{11}$/.test(id || '') ? id : null;
   }
-  function isAllowed() {return approved !== null && approved === videoId();}
-  function lock() {approved = null; document.documentElement?.removeAttribute('data-focus-gate-allowed'); pause();}
-  function pause() {
-    if (isAllowed()) return;
-    document.querySelectorAll('video').forEach(v => {v.pause();});
+  function isAllowed() {return !navigating && approved !== null && approved === videoId();}
+  function pause() {if (!isAllowed()) document.querySelectorAll('video').forEach(v => v.pause());}
+  function reset() {
+    generation++; approved = null;
+    clearTimeout(approvalTimer); approvalTimer = null;
+    document.documentElement?.removeAttribute('data-focus-gate-allowed');
+    panel?.remove(); panel = null; pause();
   }
-  // Capturing play events catches dynamically inserted players and autoplay.
-  document.addEventListener('play', event => {if (!isAllowed() && event.target instanceof HTMLMediaElement) event.target.pause();}, true);
-  function element(tag, text, parent) {const el = document.createElement(tag); if (text) el.textContent = text; if (parent) parent.append(el); return el;}
-  function show(title, description, details = '', allow = false) {
+  document.addEventListener('play', event => {
+    if (!isAllowed() && event.target instanceof HTMLMediaElement) event.target.pause();
+  }, true);
+  function element(tag, text, parent) {
+    const el = document.createElement(tag); if (text) el.textContent = text; if (parent) parent.append(el); return el;
+  }
+  function show(state, title, description = '') {
     if (!document.documentElement) return;
-    panel?.remove();
-    panel = element('div'); panel.id = 'focus-gate-panel';
-    panel.style.cssText = 'position:fixed!important;inset:0!important;z-index:2147483647!important;display:grid!important;place-items:center!important;background:#101715f5!important;';
+    panel?.remove(); panel = element('div'); panel.id = 'focus-gate-panel';
+    panel.style.cssText = 'position:fixed!important;inset:0!important;z-index:2147483647!important;display:grid!important;place-items:center!important;background:#101715ee!important;';
     const root = panel.attachShadow({mode: 'open'});
-    const style = element('style', '', root);
-    style.textContent = ':host{all:initial}*{box-sizing:border-box}.card{width:min(580px,90vw);padding:40px;background:#f5f4eb;border-radius:24px;font:16px/1.6 system-ui,sans-serif;color:#18372d;box-shadow:0 24px 100px #0005}small{font-size:11px;letter-spacing:3px;font-weight:750}h1{font-size:32px;line-height:1.15;letter-spacing:-1px;margin:16px 0}p{color:#465950;margin:14px 0}.details{font-size:12px;color:#66746c;overflow-wrap:anywhere}nav{display:flex;gap:10px;flex-wrap:wrap;margin-top:26px}button,a{font:600 14px system-ui;padding:12px 18px;border:1px solid #c6d0c6;border-radius:10px;background:transparent;color:#18372d;cursor:pointer;text-decoration:none}button.primary{background:#234f3f;color:#fff;border-color:#234f3f}button:focus-visible,a:focus-visible{outline:3px solid #b99034;outline-offset:3px}';
-    const card = element('section', '', root); card.className = 'card'; card.setAttribute('role', 'dialog'); card.setAttribute('aria-label', 'Focus Gate video check');
-    element('small', 'FOCUS GATE / WATCH WITH INTENT', card);
-    element('h1', title, card); element('p', description, card);
-    element('p', details, card).className = 'details';
-    const nav = element('nav', '', card);
-    if (allow) {
-      const watch = element('button', 'Watch this video', nav); watch.className = 'primary';
-      const id = current, ticket = generation;
-      watch.onclick = () => {
-        if (videoId() !== id || generation !== ticket) return sync();
-        approved = id; document.documentElement.setAttribute('data-focus-gate-allowed', id); panel?.remove(); panel = null;
-        // User click starts playback; navigating to another video revokes access.
-        const video = document.querySelector('video'); if (video) video.play().catch(() => {});
-      };
-    } else if (current) {
-      const retry = element('button', 'Check again', nav); retry.onclick = () => check();
+    element('style', `:host{all:initial}*{box-sizing:border-box}.card{width:min(410px,88vw);padding:42px 32px;background:#f8f9f4;border-radius:24px;text-align:center;font:16px/1.6 system-ui,sans-serif;color:#20382e;box-shadow:0 24px 100px #0004}.icon{display:grid;place-items:center;width:68px;height:68px;margin:0 auto 22px;border-radius:50%}.icon svg{display:block;width:32px;height:32px;overflow:visible}.loading{width:48px;height:48px;margin:10px auto 32px;border:4px solid #dce6db;border-top-color:#315d46;border-radius:50%;animation:spin .85s linear infinite}.allowed{color:#227343;background:#e0f2e4}.blocked{color:#b83f43;background:#fbe5e4}.error{color:#946418;background:#f7edd7}h1{font-size:25px;line-height:1.25;letter-spacing:-.6px;margin:0}p{font-size:14px;color:#667367;margin:12px 0 0;overflow-wrap:anywhere}@keyframes spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.loading{animation-duration:2s}}`, root);
+    const card = element('section', '', root); card.className = 'card';
+    card.setAttribute('role', 'status'); card.setAttribute('aria-live', 'polite');
+    card.setAttribute('aria-busy', state === 'loading' ? 'true' : 'false');
+    const icon = element('div', '', card);
+    icon.className = state === 'loading' ? 'loading' : `icon ${state}`; icon.setAttribute('aria-hidden', 'true');
+    if (state !== 'loading') {
+      // Fixed vector geometry avoids font-dependent glyph baselines and bearings.
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('viewBox', '0 0 32 32'); svg.setAttribute('fill', 'none');
+      svg.setAttribute('stroke', 'currentColor'); svg.setAttribute('stroke-width', '3');
+      svg.setAttribute('stroke-linecap', 'round'); svg.setAttribute('stroke-linejoin', 'round');
+      svg.setAttribute('focusable', 'false');
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', state === 'allowed' ? 'M7 16 L13 22 L25 10' : state === 'blocked' ? 'M9 9 L23 23 M23 9 L9 23' : 'M16 8 V18 M16 24 h0');
+      svg.append(path); icon.append(svg);
     }
-    const leave = element('a', 'Leave video', nav); leave.href = 'about:blank';
-    const settings = element('button', 'Settings', nav); settings.onclick = () => chrome.runtime.sendMessage({type: 'settings'}).catch(() => {});
+    element('h1', title, card); if (description) element('p', description, card);
     document.documentElement.append(panel);
   }
+  function startPlayback() {
+    if (!isAllowed()) return;
+    const video = document.querySelector('video.html5-main-video') || document.querySelector('video');
+    // A browser autoplay restriction may still require the native Play control.
+    if (video) video.play().catch(() => {});
+  }
+  document.addEventListener('loadedmetadata', startPlayback, true);
   async function check() {
-    const id = videoId(); current = id; const ticket = ++generation; lock();
+    reset(); const id = videoId(); current = id; const ticket = generation;
     if (!id) return;
-    show('Checking this video', 'Comparing the available video text with your goals. Playback is paused.', 'A check sends your goals and this video’s public text to OpenAI.');
+    if (location.pathname.startsWith('/shorts/')) {
+      show('blocked', 'Shorts are blocked', 'Save your attention.');
+      return;
+    }
+    show('loading', 'Checking video…');
     try {
       const result = await chrome.runtime.sendMessage({type: 'evaluate', videoId: id});
-      if (ticket !== generation || videoId() !== id) return;
-      if (result?.error) return show('Still paused', result.error);
-      if (typeof result?.allowed !== 'boolean') return show('Still paused', 'No valid decision received.');
-      show(result.allowed ? 'This supports your goals' : result.verdict === 'uncertain' ? 'Not enough evidence' : 'Save your attention', result.reason,
-        `${result.title} · ${result.channel}\nChecked: ${result.evidence}. Footage was not analyzed.${result.cached ? ' Cached decision.' : ''}`, result.allowed);
-    } catch {if (ticket === generation) show('Still paused', 'Extension connection was interrupted. Reload this page to reconnect.');}
+      if (ticket !== generation || videoId() !== id || navigating) return;
+      if (result?.error) return show('error', 'Couldn’t check this video', result.error);
+      if (typeof result?.allowed !== 'boolean') return show('error', 'Couldn’t check this video', 'Reload this page to try again.');
+      if (!result.allowed) {
+        return result.verdict === 'uncertain'
+          ? show('blocked', 'Save your attention', 'This video’s relevance could not be confirmed.')
+          : show('blocked', 'Save your attention', 'This video isn’t relevant to your interests.');
+      }
+      show('allowed', 'Good to watch');
+      approvalTimer = setTimeout(() => {
+        if (ticket !== generation || videoId() !== id || navigating) return;
+        approved = id; document.documentElement.setAttribute('data-focus-gate-allowed', id);
+        panel?.remove(); panel = null; startPlayback();
+      }, 300);
+    } catch {
+      if (ticket === generation) show('error', 'Couldn’t check this video', 'Reload this page to reconnect.');
+    }
   }
   function sync() {
+    if (!document.documentElement || navigating) return pause();
     const id = videoId();
-    if (id !== current) {current = id; generation++; lock(); panel?.remove(); panel = null; if (id) check();}
-    if (!id && panel) {panel.remove(); panel = null;}
+    if (id !== current) {if (id) check(); else {current = null; reset();}}
     pause();
   }
-  document.addEventListener('yt-navigate-start', () => {generation++; current = null; lock(); panel?.remove(); panel = null;});
-  document.addEventListener('yt-navigate-finish', sync);
+  document.addEventListener('yt-navigate-start', () => {
+    navigating = true; current = null; reset(); clearTimeout(navigationTimer);
+    // Some surfaces omit the finish event; never remain stuck indefinitely.
+    navigationTimer = setTimeout(() => {navigating = false; sync();}, 1500);
+  });
+  document.addEventListener('yt-navigate-finish', () => {clearTimeout(navigationTimer); navigating = false; sync();});
+  chrome.runtime.onMessage.addListener(message => {
+    if (message.type === 'focus-settings-changed') {current = null; reset(); sync();}
+  });
   window.addEventListener('popstate', sync);
-  // URL polling also covers history changes on embeds and mobile YouTube.
   setInterval(sync, 250);
   document.addEventListener('DOMContentLoaded', sync, {once: true});
   sync();
