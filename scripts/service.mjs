@@ -1,3 +1,4 @@
+import {readProviderConfig, writeProviderConfig, validateProviderConfig, PROVIDERS, keychainHelper} from '../server/provider-config.mjs';
 import {mkdir, readFile, writeFile, copyFile, cp, rm, chmod, access} from 'node:fs/promises';
 import {execFileSync, spawn} from 'node:child_process';
 import {createHash, randomBytes} from 'node:crypto';
@@ -14,13 +15,14 @@ const label = 'com.focusgate.service', domain = `gui/${process.getuid()}`;
 const plist = join(homedir(), 'Library/LaunchAgents', label + '.plist');
 const target = `${domain}/${label}`;
 const helper = join(bin, 'keychain');
+let config;
 const command = process.argv[2];
 const exists = path => access(path).then(() => true, () => false);
 const run = (name, args, options = {}) => execFileSync(name, args, {stdio: ['ignore', 'pipe', 'pipe'], ...options});
 const xml = s => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 function loaded() {try {run('launchctl', ['print', target]); return true;} catch {return false;}}
 function stop() {if (loaded()) run('launchctl', ['bootout', target]);}
-function keyAvailable() {try {return run(helper, ['get']).length > 0;} catch {return false;}}
+function keyAvailable() {try {return run(keychainHelper(data, config.provider), ['get', config.provider]).length > 0;} catch {return false;}}
 async function health() {
   const token = (await readFile(join(data, 'pairing-token'), 'utf8')).trim();
   const response = await fetch('http://127.0.0.1:43127/health', {headers: {Authorization: `Bearer ${token}`}, signal: AbortSignal.timeout(1500)});
@@ -36,7 +38,7 @@ async function start() {
     run('launchctl', ['bootstrap', domain, plist]);
   } else run('launchctl', ['kickstart', '-k', target]);
   for (let n = 0; n < 25; n++) {
-    try {const result = await health(); if (result.apiConfigured) {console.log('Background service is running and will start at login.'); return;}} catch {}
+    try {const result = await health(); if (result.apiConfigured) {console.log(`Background service running: ${result.providerName || result.provider} / ${result.model}. Starts at login.`); return;}} catch {}
     await new Promise(resolve => setTimeout(resolve, 200));
   }
   throw new Error('Service did not become ready. Check npm run service:status and the private service.err.log.');
@@ -50,6 +52,14 @@ async function stage() {
     run('/usr/bin/xcrun', ['swiftc', join(root, 'scripts/keychain.swift'), '-o', helper]);
     await chmod(helper, 0o700);
     await writeFile(join(bin, 'keychain.sha256'), hash, {mode: 0o600});
+  }
+  const providerSource = await readFile(join(root, 'scripts/provider-keychain.swift'));
+  const providerHash = createHash('sha256').update(providerSource).digest('hex');
+  const providerHelper = join(bin, 'keychain-provider');
+  if ((await readFile(join(bin, 'provider-keychain.sha256'), 'utf8').catch(() => '')) !== providerHash || !await exists(providerHelper)) {
+    run('/usr/bin/xcrun', ['swiftc', join(root, 'scripts/provider-keychain.swift'), '-o', providerHelper]);
+    await chmod(providerHelper, 0o700);
+    await writeFile(join(bin, 'provider-keychain.sha256'), providerHash, {mode: 0o600});
   }
   // Keep a stable runtime independent of shell initialization and version managers.
   await copyFile(process.execPath, join(bin, 'node.next')); await chmod(join(bin, 'node.next'), 0o700);
@@ -84,14 +94,14 @@ async function stage() {
 }
 async function saveKey() {
   if (!process.stdin.isTTY) throw new Error('Run npm run setup in an interactive terminal to enter your API key privately.');
-  process.stdout.write('OpenAI API key (hidden, stored in Apple Keychain; Enter keeps existing key): ');
+  process.stdout.write(`${PROVIDERS[config.provider].label} API key (hidden, stored in Apple Keychain; Enter keeps this provider's existing key): `);
   const silent = new Writable({write(_chunk, _encoding, done) {done();}});
   const rl = createInterface({input: process.stdin, output: silent, terminal: true});
   let key;
   try {key = (await rl.question('')).trim();} finally {rl.close(); process.stdout.write('\n');}
   if (key) {
     await new Promise((resolve, reject) => {
-      const child = spawn(helper, ['set'], {stdio: ['pipe', 'ignore', 'inherit']});
+      const child = spawn(keychainHelper(data, config.provider), ['set', config.provider], {stdio: ['pipe', 'ignore', 'inherit']});
       child.on('error', reject); child.stdin.on('error', reject);
       child.on('exit', code => code === 0 ? resolve() : reject(new Error('Could not store the key.')));
       child.stdin.end(key);
@@ -101,13 +111,34 @@ async function saveKey() {
 }
 try {
   if (process.platform !== 'darwin') throw new Error('This background setup supports macOS.');
+  const args = process.argv.slice(3);
+  let providerArg, modelArg;
+  while (args.length) {
+    const flag = args.shift(), value = args.shift();
+    if (command !== 'setup' || !value || !['--provider', '--model'].includes(flag)) throw new Error('Setup accepts --provider openai|anthropic|gemini|xai and --model MODEL_ID.');
+    if (flag === '--provider') providerArg = value; else modelArg = value;
+  }
+  let saved;
+  try {saved = await readProviderConfig(data);} catch (error) {if (!providerArg || !modelArg) throw error; saved = {};}
+  config = saved;
+  if (command === 'setup') {
+    if (!process.stdin.isTTY) throw new Error('Run npm run setup in an interactive terminal.');
+    const rl = createInterface({input: process.stdin, output: process.stdout});
+    try {
+      const provider = providerArg || (await rl.question(`Provider: openai, anthropic (Claude), gemini, xai (Grok) [${saved.provider}]: `)).trim() || saved.provider;
+      if (!Object.hasOwn(PROVIDERS, provider)) throw new Error('Unknown provider. Choose openai, anthropic, gemini, or xai.');
+      const fallback = provider === saved.provider ? saved.model : provider === 'openai' ? 'gpt-4.1-mini' : '';
+      const model = modelArg || (await rl.question(`Model ID${fallback ? ' [' + fallback + ']' : ' (must support structured JSON output)'}: `)).trim() || fallback;
+      config = validateProviderConfig({provider, model});
+    } finally {rl.close();}
+  }
   switch (command) {
-    case 'setup': await stage(); await saveKey(); await start(); console.log('Local pairing token (paste into extension settings):\n' + (await readFile(join(data, 'pairing-token'), 'utf8')).trim()); break;
+    case 'setup': await stage(); await saveKey(); await writeProviderConfig(data, config); await start(); console.log('Local pairing token (paste into extension settings):\n' + (await readFile(join(data, 'pairing-token'), 'utf8')).trim()); break;
     case 'install': await stage(); console.log('Run npm run setup once to save your API key and activate the service.'); break;
     case 'update': {const active = loaded(); stop(); try {await stage();} catch (error) {if (active) await start(); throw error;} await start(); break;}
     case 'start': await start(); break;
     case 'stop': stop(); console.log('Stopped until manually started or next login.'); break;
-    case 'status': console.log('Login service: ' + (loaded() ? 'loaded' : 'not loaded')); try {const result = await health(); console.log('Backend reachable. API configured: ' + result.apiConfigured);} catch {console.log('Backend not reachable with the saved pairing token.');} break;
+    case 'status': console.log('Login service: ' + (loaded() ? 'loaded' : 'not loaded')); try {const result = await health(); console.log(`Backend reachable: ${result.providerName || result.provider || 'OpenAI'} / ${result.model}. API configured: ${result.apiConfigured}`);} catch {console.log('Backend not reachable with the saved pairing token.');} break;
     case 'token': console.log((await readFile(join(data, 'pairing-token'), 'utf8')).trim()); break;
     case 'uninstall': stop(); await rm(plist, {force: true}); console.log('Login service removed. Keychain entry and private local data retained.'); break;
     default: throw new Error('Use setup, update, start, stop, status, token, or uninstall.');

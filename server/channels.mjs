@@ -1,4 +1,4 @@
-import {limitedText} from './core.mjs';
+import {limitedText} from './http.mjs';
 
 export const CHANNEL_ID = /^UC[\w-]{22}$/;
 

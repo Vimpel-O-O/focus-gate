@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Focus Gate",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Check YouTube videos against your learning goals before playback.",
   "permissions": [
     "storage"

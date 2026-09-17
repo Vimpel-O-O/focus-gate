@@ -30,6 +30,6 @@ $('settings').addEventListener('submit', async event => {
 });
 $('test').onclick = async () => {
   $('connection').textContent = 'Connecting…';
-  try {const result = await chrome.runtime.sendMessage({type: 'health'}); $('connection').textContent = result.error || (result.apiConfigured ? `Connected · ${result.model} · API key configured (not yet validated by a live request).` : 'Connected, but the service needs an API key.');}
+  try {const result = await chrome.runtime.sendMessage({type: 'health'}); $('connection').textContent = result.error || (result.apiConfigured ? `Connected · ${result.providerName || result.provider || 'OpenAI'} · ${result.model} · API key configured (not yet validated by a live request).` : 'Connected, but the service needs an API key.');}
   catch {$('connection').textContent = 'Cannot connect. Start the service and save your pairing token first.';}
 };

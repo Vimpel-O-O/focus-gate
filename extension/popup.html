@@ -6,7 +6,7 @@
 <label for="trustedChannels">Trusted channels</label><textarea id="trustedChannels" rows="2" maxlength="7500" placeholder="@yourfavoritecreator&#10;https://www.youtube.com/@anothercreator"></textarea>
 <p class="hint">One @handle or channel URL per line. These channels skip AI review. Shorts stay blocked.</p>
 <label for="token">Local pairing token</label><input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="Token from your local service" required>
-<p class="hint">Use the token from your terminal, not your OpenAI API key.</p>
+<p class="hint">Use the token from your terminal, not your provider API key.</p>
 <div class="actions"><button type="submit">Save</button><button type="button" id="test">Test connection</button></div>
 <p id="status" role="status"></p><p id="connection" role="status"></p>
-</fieldset></form><footer>Reviews video text against your interests. Your interests and retrieved video text are sent to OpenAI.</footer></main><script type="module" src="options.js"></script></body></html>
+</fieldset></form><footer>Reviews video text against your interests. Your interests and retrieved video text are sent to your selected AI provider.</footer></main><script type="module" src="options.js"></script></body></html>

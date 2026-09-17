@@ -1,9 +1,11 @@
+import {PROVIDERS, validateProviderConfig} from './provider-config.mjs';
 import {createServer} from 'node:http';
 import {timingSafeEqual, createHash} from 'node:crypto';
 import {validateInput, getVideoSource, evaluateVideo} from './core.mjs';
 import {resolveChannel} from './channels.mjs';
 
-export function createGateServer({apiKey, token, model = 'gpt-4.1-mini', sourceLoader = getVideoSource, evaluator = evaluateVideo, channelResolver = resolveChannel, cache = new Map()}) {
+export function createGateServer({apiKey, token, provider = 'openai', model, sourceLoader = getVideoSource, evaluator = evaluateVideo, channelResolver = resolveChannel, cache = new Map()}) {
+  ({provider, model} = validateProviderConfig({provider, model}));
   if (!token || token.length < 32) throw new Error('A strong pairing token is required.');
   const pending = new Map(); let calls = [], lookups = [], resolutions = [];
   const server = createServer(async (req, res) => {
@@ -22,7 +24,7 @@ export function createGateServer({apiKey, token, model = 'gpt-4.1-mini', sourceL
     const supplied = Buffer.from(String(req.headers.authorization || '').replace(/^Bearer /, ''));
     const expected = Buffer.from(token);
     if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) return send(401, {error: 'Pairing token is missing or incorrect. Open extension settings.'});
-    if (req.url === '/health' && req.method === 'GET') return send(200, {ok: true, apiConfigured: Boolean(apiKey), model});
+    if (req.url === '/health' && req.method === 'GET') return send(200, {ok: true, apiConfigured: Boolean(apiKey), provider, providerName: PROVIDERS[provider].label, model});
     if (!['/evaluate', '/resolve-channels'].includes(req.url) || req.method !== 'POST') return send(404, {error: 'Not found.'});
     if (!String(req.headers['content-type']).startsWith('application/json')) return send(415, {error: 'JSON required.'});
     try {
@@ -39,7 +41,7 @@ export function createGateServer({apiKey, token, model = 'gpt-4.1-mini', sourceL
         return send(200, {trustedChannelIds: [...new Set(ids)].sort()});
       }
       let input; try {input = validateInput(parsed);} catch (e) {return send(400, {error: e.message});}
-      const key = createHash('sha256').update(JSON.stringify({...input, model, policyVersion: 2})).digest('hex');
+      const key = createHash('sha256').update(JSON.stringify({...input, provider, model, policyVersion: 3})).digest('hex');
       const hit = cache.get(key);
       if (hit && Date.now() - hit.at < 6 * 3600000) return send(200, {...hit.value, cached: true});
       if (!pending.has(key)) {
@@ -52,11 +54,11 @@ export function createGateServer({apiKey, token, model = 'gpt-4.1-mini', sourceL
           if (source.channelId && input.trustedChannelIds.includes(source.channelId)) {
             value = {allowed: true, verdict: 'allow', confidence: 1, trustedChannel: true, reason: 'You trusted this channel.', goal: '', title: source.title, channel: source.channel, evidence: 'verified YouTube channel ID'};
           } else {
-            if (!apiKey) throw new Error('No OpenAI API key configured. Restart the local service with your key.');
+            if (!apiKey) throw new Error('No API key configured for the selected provider. Run npm run setup.');
             calls = calls.filter(t => Date.now() - t < 3600000);
             if (calls.length >= 30) throw new Error('Local AI check limit reached. Try later. Videos stay blocked.');
             calls.push(Date.now());
-            value = await evaluator(input, source, {apiKey, model});
+            value = await evaluator(input, source, {apiKey, provider, model});
           }
           if (cache.size >= 300) cache.delete(cache.keys().next().value);
           cache.set(key, {at: Date.now(), value});

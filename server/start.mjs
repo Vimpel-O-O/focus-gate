@@ -1,3 +1,4 @@
+import {readProviderConfig, validateProviderConfig, PROVIDERS, keychainHelper} from './provider-config.mjs';
 import {randomBytes} from 'node:crypto';
 import {mkdir, readFile, writeFile} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
@@ -8,9 +9,12 @@ import {openCache} from './cache.mjs';
 
 const local = process.env.FOCUS_GATE_DATA_DIR || join(homedir(), 'Library/Application Support/FocusGate');
 await mkdir(local, {recursive: true, mode: 0o700});
-let apiKey = process.env.OPENAI_API_KEY || '';
+const saved = await readProviderConfig(local);
+const provider = process.env.FOCUS_GATE_PROVIDER || saved.provider;
+const {model} = validateProviderConfig({provider, model: process.env.FOCUS_GATE_MODEL || (provider === 'openai' ? process.env.OPENAI_MODEL : '') || (provider === saved.provider ? saved.model : undefined)});
+let apiKey = process.env[PROVIDERS[provider].keyEnv] || '';
 if (!apiKey) {
-  try {apiKey = execFileSync(join(local, 'bin/keychain'), ['get'], {stdio: ['ignore', 'pipe', 'pipe']}).toString().trim();}
+  try {apiKey = execFileSync(keychainHelper(local, provider), ['get', provider], {stdio: ['ignore', 'pipe', 'pipe']}).toString().trim();}
   catch {console.error('API key unavailable. Run npm run setup with your login Keychain unlocked.');}
 }
 const tokenFile = join(local, 'pairing-token');
@@ -23,7 +27,7 @@ catch (error) {
 }
 if (!/^[a-f0-9]{64}$/.test(token)) throw new Error('Invalid pairing token. Restore your local pairing-token file.');
 const cache = await openCache(join(local, 'decisions.json'));
-const server = createGateServer({apiKey, token, cache, model: process.env.OPENAI_MODEL || 'gpt-4.1-mini'});
+const server = createGateServer({apiKey, token, cache, provider, model});
 server.on('error', e => {console.error(e.code === 'EADDRINUSE' ? 'Port 43127 is already in use. Stop the other service first.' : 'Local service failed to start.'); process.exitCode = 1;});
 server.listen(43127, '127.0.0.1', () => console.log('Focus Gate listening on 127.0.0.1:43127. API configured: ' + Boolean(apiKey)));
 let stopping = false;
