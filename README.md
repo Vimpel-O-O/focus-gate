@@ -1,19 +1,19 @@
 # Focus Gate
 
-A Chrome/Brave extension that pauses YouTube videos, checks their topic against your interests using OpenAI, and allows relevant videos. Shorts are blocked automatically. Trusted channels skip AI review. Approved videos resume after a 300 ms checkmark; unrelated videos stay blocked.
+A Chrome browser extension that pauses YouTube videos, checks their topic against your interests using AI, and allows relevant videos. Shorts are blocked automatically. Trusted channels skip AI review. Approved videos resume after a 300 ms checkmark; unrelated videos stay blocked.
 
-The hidden local macOS service was chosen to prioritize response time and avoid cloud hosting cold starts. New reviews still require YouTube and OpenAI network requests. Decisions are cached privately for six hours, including across service restarts; changing interests or trusted channels triggers a fresh check.
+The hidden local macOS service was chosen to prioritize response time and avoid cloud hosting cold starts. Decisions are cached privately for six hours, including across service restarts; changing interests or trusted channels triggers a fresh check.
 
 ## Setup (macOS)
 
-Requires Node.js 22+ and Apple Command Line Tools (`xcode-select --install`). An OpenAI API key with API billing is required.
+Requires Node.js 22+ and Apple Command Line Tools (`xcode-select --install`). An AI API key with token billing is required.
 
 1. Clone this repository and open a terminal in its folder.
 2. Run `npm run setup`. Enter your API key at the hidden prompt. It is stored in Apple Keychain. If an old `npm start` process is running, stop it first.
-3. In `chrome://extensions` or `brave://extensions`, enable Developer mode, choose **Load unpacked**, and select this repository's `extension` folder.
+3. In `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and select this repository's `extension` folder.
 4. Open the extension popup. Enter your interests and the local pairing token printed by setup, then save. Optionally add trusted channel handles or URLs.
 
-The service runs in the background and starts at login. No open terminal is needed. Your existing pairing token is preserved when upgrading from the old setup.
+The service runs in the background and starts at login. No open terminal session is needed. Your existing pairing token is preserved when upgrading from the old setup.
 
 ## Updates and controls
 
@@ -30,6 +30,6 @@ Runtime, cache, pairing token and logs live in `~/Library/Application Support/Fo
 
 ## Privacy and limits
 
-No interests are preset. Settings stay in browser local storage; your interests and retrieved video text are sent to OpenAI for reviews. The API key stays on your Mac. The cache contains private video metadata. Only YouTube playback is gated; other websites are unaffected.
+No interests are preset. Settings stay in browser local storage; your interests and retrieved video text are sent to the AI provider company for process of reviewing. The API key stays on your Mac. The cache contains private video metadata. Only YouTube playback is gated; other websites are unaffected.
 
-Reviews use titles, descriptions and captions when available, not video footage. AI can misclassify videos. Failed or uncertain checks stay blocked. This is a voluntary attention aid and can be disabled.
+Reviews use titles, descriptions and captions when available, not video footage. AI can misclassify videos. Failed or uncertain checks stay blocked. This is a voluntary attention aid tool and can be disabled anytime.
